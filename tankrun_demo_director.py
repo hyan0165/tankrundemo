@@ -10,6 +10,8 @@
 
 import math
 import random
+import copy
+
 
 """ --- 自定义 "导演系统" 所需全局变量 --- """
 
@@ -101,8 +103,20 @@ defendSliceDownBoundary = -150.0
 
 
 
-# --- 生还者切换至 S Status 所需满足的与终点安全区域的导演距离边界 --- #
+# --- 生还者切换至 S Status 所需满足的与终点安全区域的 导演距离 边界 --- #
 flowDistanceToFinalCheckPoint = 1000.0
+
+
+
+# --- 用于生还者分组策略的生还者传播半径, 基于maxD距离 --- #
+survivorSpreadRadius = 660.0
+
+
+
+# --- 生还者压力计算过程中的参数 --- #
+
+# 宽裕度, 详见 "方案" 第 1.1.6 小节: 前后为难的压力
+alpha = 50.0
 
 
 
@@ -157,15 +171,21 @@ def euclideanDistance(pos1: tuple, pos2: tuple):    # 计算欧式距离, 输入
 
 
 
-""" 后续需要修改 """
-# def maxDistance( mainTarget: Client, deputyTarget: Client ):     # 假设生还者和坦克均继承自Client类, mainTarget和deputyTarget的类型可以为生还者或坦克
-#     """
-#     获取mainTarget和deputyTarget的maxD距离, 其中mainTarget是主要目标 (为mainTarget计算maxD距离), deputyTarget是副目标
-#     """
-#     return max(
-#         euclideanDistance( mainTarget.getAbsolutePosition(), deputyTarget.getAbsolutePosition() ),
-#         abs( mainTarget.getFlowDistance() - deputyTarget.getFlowDistance() )
-#     )
+def maxDistance( dataOfMainTarget: tuple, dataOfDeputyTarget: tuple ):
+    """
+    计算 mainTarget 和 deputyTarget 的 maxD 距离, 其中 mainTarget 是主要目标 (为 mainTarget 计算 maxD 距离), deputyTarget 是副目标
+
+    parameters:
+    @dataOfMainTarget: 主要目标的 ( 绝对坐标, 导演路程 ) 二元组, 其中绝对坐标为 (x, y, z) 三元组, 导演路程为浮点型
+    @dataOfDeputyTarget: 副目标的 ( 绝对坐标, 导演路程 ) 二元组, 其中绝对坐标为 (x, y, z) 三元组, 导演路程为浮点型
+
+    return:
+    主要目标与副目标之间的 maxD 距离
+    """
+    return max(
+        euclideanDistance( dataOfMainTarget[ 0 ], dataOfDeputyTarget[ 0 ] ),
+        abs( dataOfMainTarget[ 1 ] - dataOfDeputyTarget[ 1 ] )
+    )
 
 
 
@@ -213,6 +233,25 @@ def stressComputeModel_BG( D: float ):
     
     else:
         return 0.0
+
+
+def callStressComputeModel( D: float, modelType: str, gamma: float ):
+    """
+    根据 modelType 参数的取值调用相应的函数计算压力值
+    """
+    if modelType == "R":
+        return stressComputeModel_RG( D ) * gamma
+
+    elif modelType == "D":
+        return stressComputeModel_DG( D ) * gamma
+    
+    elif modelType == "B":
+        return stressComputeModel_BG( D ) * gamma
+    
+    else:       # 如果 modelType 的取值不为 R, D, B 或出现异常, 那么返回 0.0
+        return 0.0
+        
+
 
 
 # --- 以下函数搭建生还者和生还者组别之间的桥梁 --- #
@@ -290,18 +329,149 @@ def getSurvivorClassListSortedByFlowDist(satisfiedSurvivorClients: list, last_su
 
 
 
-def survivorGroupingStrategy(survivorClassList: list):
+def survivorGroupingStrategy(survivorClassList: list, last_survivorGroupClassList: list):
     """
-    通过分组策略为生还者实例化类队列分组, 并为每一个组别创建对应的生还者组别实例化类, 同时按照创建的顺序加入数组中
+    通过分组策略为生还者类队列分组, 并为每一个组别创建对应的生还者组别实例化类, 同时按照创建的顺序加入数组中
+    生还者分组策略详见 "方案" 第 1.1.4 小节: 生还者分组策略;
+    注意, 这里还涉及到生还者组别类的合并与拆分策略, 详见 "方案" 第 3.1.3 小节: 生还者组别合并和拆分时数据的合并和复制
     组别实例化类在数组中的先后顺序 等价于 组别在 导演路程 中的先后顺序
 
     parameters:
     @survivorClassList: 已经经过处理的 生还者实例化类 列表
+    @last_survivorGroupClassList: 上一个插件执行周期中的 组别实例化类 列表
 
     return:
     @survivorGroupClassList: 当前的 组别实例化类 列表
     """
-    pass
+    if len( survivorClassList ) <= 0:     # 异常值处理
+        return []
+
+
+    survivorGroupClassList = []
+    waitingForAllocation = survivorClassList.copy()     # 等待分配的生还者类, 为了避免修改原本的 survivorClassList, 需要进行复制
+
+
+    # --- 创建新的survivorGroupClassList --- #
+
+    # 请确保 survivorClassList / waitingForAllocation 中的生还者类已经全部按照导演路程的取值 降序 排序
+
+    while len(waitingForAllocation) > 0:        # 仍然存在生还者没有被划分进某一个组别
+
+
+        # --- 创建一个新的生还者组别 --- #
+
+        survivorClassListGroupingByStrategy = []        # 初始化生还者类的 子 列表, 代表了一个新的组别
+
+        firstSurvivorClass = waitingForAllocation[0]        # 确定该组别的首位生还者
+
+        survivorClassListGroupingByStrategy.append( firstSurvivorClass )
+
+        waitingForAllocation.remove( firstSurvivorClass )       # 移除 已经划分进组别的生还者
+
+        index = 0       # 从 survivorClassListGroupingByStrategy 的第一个生还者开始, 向后计算 maxD 的数值, 逐个检查 仍然等待分配的生还者 是否可以加入到该组别中
+
+        j = 0       # 遍历 waitingForAllocation 中元素的下标, 注意 waitingForAllocation 内的元素数量可能会发生改变, 因为有可能会在循环体内部执行删除操作
+
+        while index < len( survivorClassListGroupingByStrategy ):
+
+            while j < len( waitingForAllocation ):
+
+                if maxDistance( 
+                    ( waitingForAllocation[ j ].absolutePosition, waitingForAllocation[ j ].flowDistance ),
+                    ( survivorClassListGroupingByStrategy[ index ].absolutePosition, survivorClassListGroupingByStrategy[ index ].flowDistance )
+                ) <= survivorSpreadRadius:      # 这两个生还者之间的 maxD 距离 小于等于 生还者传播半径
+                    
+                    survivorClassListGroupingByStrategy.append( waitingForAllocation[ j ] )      # 加入
+
+                    waitingForAllocation.remove( waitingForAllocation[ j ] )     # 移除, 此时下标j 不 应该自增
+
+                else:
+
+                    j += 1
+
+            # 每一个已经加入了 survivorClassListGroupingByStrategy 的生还者都需要与 所有 仍然在 waitingForAllocation 的生还者 进行比较
+            index += 1
+            j = 0
+
+
+        # --- 这个新的生还者组别的成员名单已经确定完毕, 启动生还者组别合并与拆分策略, 并将更新了信息后的组别实例化类加入到 survivorGroupClassList 中 --- #
+        
+        # 考虑到一个组别可能会在一个执行周期内被拆分成 多个 组别的小概率事件, 因此不直接在 原内存地址 更新 last_groupClass 的各项信息,
+        # 而是 划分出一个新的内存地址, 将原本 last_groupClass 的所有信息深度复制过去, 再更新其中的信息,
+        # 以避免修改原本 last_groupClass 中的任何信息, 因为这是任何周期内组别的合并与拆分的基准
+
+        updatedGroupClass = None
+        
+        if len( last_survivorGroupClassList ) > 0:          # 过去存在组别实例化类, 说明插件已经不是第一次执行
+
+            findGroupBindFirstSurvivor = False        # 是否找到了该组别 首位生还者 过去所在的组别
+
+            for groupClass in last_survivorGroupClassList:
+
+                if firstSurvivorClass in groupClass.survivorMembers:        # 找到了首位生还者过去所在的组别
+
+                    updatedGroupClass = copy.deepcopy( groupClass )         # deepcopy 确保组别类中的 所有数组 也一并划分新内存地址, 请根据插件中类似功能的函数进行实现
+                    updatedGroupClass.updateSurvivorGroupInfo( survivorClassListGroupingByStrategy )
+                    
+                    survivorGroupClassList.append( updatedGroupClass )      # 将更新后的组别实例化信息加入到 survivorGroupClassList 中
+
+                    findGroupBindFirstSurvivor = True
+                    break       # 结束查找
+
+            if not findGroupBindFirstSurvivor:      # 该 首位生还者 过去没有存在于任何生还者组别中, 已经排除掉插件第一次执行的情况, 那么说明生还者刚刚复活 / 加入游戏
+
+                # --- 下面的代码为原本不存在于 "方案" 中的新增功能, 请仔细阅读注释 ---#
+
+                # 一个过去不存在于任何生还者组别中的生还者, 突然成为了某一组别的首位生还者, 那么大概率是被后方的生还者使用电击器复活,
+                # 或者从前方的复活门中复活. 因此, 通常来讲复活的生还者所属的组别的成员数量 大于1
+                # 如果根据这个过去不存在的首位生还者, 直接创建一个与所有现存的生还者组别都没有任何关系的新组别, 显然不太合理
+                # 因此, 应该 跳过 该首位生还者, 而在该组别内向后查找 第一位 过去存在于某个生还者组别中 的生还者, 继承其之前所属组别的属性, 才是相对合理的处理方式;
+                # 此功能理论上可以与上面的代码合并成 一个 循环体, 但为了方便理解功能的设计, 还是选择拆分成多个循环体
+
+                if len( survivorClassListGroupingByStrategy ) <= 1:     # 极少数异常情况下, 才会为 该过去不存在的生还者 初始化一个生还者组别类
+
+                    updatedGroupClass = SurvivorGroupClass( survivorClassListGroupingByStrategy )
+                    survivorGroupClassList.append( updatedGroupClass )      # 将新创建的组别实例化信息加入到 survivorGroupClassList 中
+
+                else:
+
+                    findGroup = False       # 找到了该组别后面的生还者过去所在的组别
+                    index = 1       # 遍历 survivorClassListGroupingByStrategy 的下标, 除去首位生还者
+
+                    while index < len( survivorClassListGroupingByStrategy ):
+
+                        for groupClass in last_survivorGroupClassList:
+
+                            if survivorClassListGroupingByStrategy[ index ] in groupClass.survivorMembers:      # 找到了后面的生还者过去所在的组别
+
+                                updatedGroupClass = copy.deepcopy( groupClass )
+                                updatedGroupClass.updateSurvivorGroupInfo( survivorClassListGroupingByStrategy )
+
+                                survivorGroupClassList.append( updatedGroupClass )      # 将更新后的组别实例化信息加入到 survivorGroupClassList 中
+
+                                findGroup = True
+                                break       # 结束查找
+
+                        if findGroup:       # 如果已经成功更新实例化信息并加入了 survivorGroupClassList 中, 那么不再检查后面的生还者
+                            break
+
+                        index += 1
+
+                    
+                    if not findGroup:       # 如果该组别的后方生还者也没有任何一个生还者之前存在于某一个组别中 (异常情况), 那么就 初始化一个生还者组别类
+
+                        updatedGroupClass = SurvivorGroupClass( survivorClassListGroupingByStrategy )
+                        survivorGroupClassList.append( updatedGroupClass )      # 将新创建的组别实例化信息加入到 survivorGroupClassList 中
+
+        
+        else:        # 过去不存在组别实例化类, 说明插件第一次执行
+
+            updatedGroupClass = SurvivorGroupClass( survivorClassListGroupingByStrategy )
+            survivorGroupClassList.append( updatedGroupClass )
+
+    
+    return survivorGroupClassList       # 返回 生还者组别实例化类 队列, 各个组别在队列中的先后顺序等价于它们在导演路程中的先后顺序
+
 
 
 
@@ -360,8 +530,161 @@ def getTankClassList(tankClients: list, last_tankClassList: list):
 
 
 
-def computeCurrSurvivorStress(survivorClassList: list, tankClassList: list, stressComputeModelType: str):
-    pass
+
+def computeCurrSurvivorStress(survivorGroupClassList: list, tankClassList: list):
+    """
+    为各个生还者组别中的成员计算他们的压力值, 只有当实例化了所有 生还者类, 生还者组别类, 坦克类 以后, 才调用此函数;
+    生还者压力值的计算公式详见 “方案” 第 1.1.7, 1.1.8, 1.2.2, 1.2.3, 1.3.1, 1.3.2 小节;
+    """
+    if len( survivorGroupClassList ) <= 0:      # 异常处理
+        return False
+
+
+    # --- 下面的代码即便 len( tankClassList ) <= 0 时也可以执行, 因为游戏进行中没有出现任何坦克时不算作出现异常, 此时所有生还者的压力值应为 0 --- #
+
+    for groupClass in survivorGroupClassList:       # 遍历所有组别
+
+        for surClass in groupClass.survivorMembers:      # 遍历该组别中的所有成员
+
+            totalStressValue = 0.0      # 累计各个坦克对该成员带来的压力值
+
+            for tankClass in tankClassList:         # 为该成员遍历所有坦克
+
+                gamma = 1.0         # 压力值的衰减系数的初始值 (future discount)
+                D = 0
+                
+                focusedTarget = tankClass.returnFocusedTarget()         # 该坦克当前的仇恨目标, 数据类型为Client (或非Client)
+
+                # 异常处理, 如果坦克 丢失目标 / 仇恨目标不为生还者
+                if ( focusedTarget == None ) or ( focusedTarget == -1 ) or ( focusedTarget.type() != Survivor ):        
+                    
+                    continue        # 不中断查找, 而是 跳过 当前坦克给生还者带来的压力值的计算, 查找下一个坦克
+
+
+                # 1. 如果 s 是 t 的仇恨
+                if focusedTarget.getIdentification() == surClass.survivorID:
+
+                    D = maxDistance( 
+                        ( surClass.absolutePosition, surClass.flowDistance ),
+                        ( tankClass.absolutePosition, tankClass.flowDistance )
+                     )
+                    
+                    totalStressValue += callStressComputeModel( D, surClass.belongSurvivorGroupLogic, gamma )      # 累计该坦克对该生还者带来的压力值
+
+
+                # 2. 如果 s 不是 t 的仇恨
+                else:
+
+                    # --- gamma值的确定, 详见 "方案" 第 1.1.8 小节 --- #
+
+                    targetBelongSurvivorGroupClass = None        # 坦克的仇恨目标所在的 组别实例化类
+                    findTargetBelongSurvivorGroupClass = False     # 是否找到了仇恨目标所在的 组别实例化类
+                    index = 0       # 仇恨目标当前位于 所在成员列表中 的下标
+
+                    for gc in survivorGroupClassList:
+
+                        index = 0
+
+                        for sc in gc.survivorMembers:
+
+                            if focusedTarget.getIdentification() == sc.survivorID:
+
+                                targetBelongSurvivorGroupClass = gc         # 指向 gc 所属的内存地址
+                                findTargetBelongSurvivorGroupClass = True   # 找到了仇恨目标所在的 组别实例化类
+                                break
+
+                            index += 1
+
+                        if findTargetBelongSurvivorGroupClass:      # 找到了仇恨目标所在的 组别实例化类, 不再向后遍历
+                            break
+
+                    
+                    if not findTargetBelongSurvivorGroupClass:
+                        continue        # 异常处理, 跳过 当前坦克给生还者带来的压力值的计算, 查找下一个坦克
+
+
+                    # --- 比较 该生还者 与 坦克的目标仇恨 所在的组别实例化类 在导演路程上的先后顺序 --- #
+                    
+                    # 如果 该生还者 与 仇恨目标 属于同一个生还者组别中
+                    if groupClass.survivorGroupID == targetBelongSurvivorGroupClass.survivorGroupID:
+
+                        # gamma的最小值为0.5, index是python用于查找对象所在数组的位置的函数, 传递的参数为内存地址, 请换用插件类似功能的函数实现
+                        gamma = max( 0.9 ** abs( index - groupClass.survivorMembers.index( surClass ) ), 0.5 )
+
+                    # 如果 该生还者 与 仇恨目标 不属于同一个生还者组别中
+                    else:
+                        
+                        # 该生还者所在的组别 在 仇恨目标所在的组别 的前面 (导演路程的数值比后者更大)
+                        if groupClass.survivorMembers[ 0 ].flowDistance > targetBelongSurvivorGroupClass.survivorMembers[ 0 ].flowDistance:
+
+                            gamma = max(
+                                0.9 ** abs( groupClass.memberNum - groupClass.survivorMembers.index( surClass ) + index ),  
+                                0.5
+                            )
+
+                        # 该生还者所在的组别 在 仇恨目标所在的组别 的后面 (导演路程的数值比后者更小)
+                        elif groupClass.survivorMembers[ 0 ].flowDistance < targetBelongSurvivorGroupClass.survivorMembers[ 0 ].flowDistance:
+
+                            gamma = max(
+                                0.9 ** abs( targetBelongSurvivorGroupClass.memberNum - index + groupClass.survivorMembers.index( surClass ) ),  
+                                0.5
+                            )
+
+                        # 罕见情况下, 非 同一组别 但所处导演路程又完全一致 (分不出先后顺序), 那就根据 两个组别的人数和 的一半 (小数点截断) 计算gamma值
+                        else:
+
+                            gamma = max(
+                                0.9 ** int( 0.5 * ( groupClass.memberNum + targetBelongSurvivorGroupClass.memberNum ) ),
+                                0.5
+                            )
+
+
+                    # 2.1. si是t的仇恨，且 D(t, s) <= D(t, si) - alpha
+                    if maxDistance(
+                        ( surClass.absolutePosition, surClass.flowDistance ),
+                        ( tankClass.absolutePosition, tankClass.flowDistance )
+                    ) <= maxDistance(
+                        ( focusedTarget.getAbsolutePosition(), focusedTarget.getFlowDistance() ),       # 注意这里的 focusedTarget 是 Client 类, 充当临时变量的作用, 并没有参与实例化过程
+                        ( tankClass.absolutePosition, tankClass.flowDistance )
+                    ) - alpha:
+                        
+                        D = maxDistance( 
+                            ( surClass.absolutePosition, surClass.flowDistance ),
+                            ( tankClass.absolutePosition, tankClass.flowDistance )
+                        )
+
+                        totalStressValue += callStressComputeModel( D, surClass.belongSurvivorGroupLogic, gamma )      # 累计该坦克对该生还者带来的压力值
+
+                    # 2.2. si是t的仇恨，且D(t, s) > D(t, si) - alpha
+                    else:
+                        
+                        D = maxDistance(
+                            ( focusedTarget.getAbsolutePosition(), focusedTarget.getFlowDistance() ),
+                            ( tankClass.absolutePosition, tankClass.flowDistance )
+                        ) + maxDistance(
+                            ( surClass.absolutePosition, surClass.flowDistance ),
+                            ( focusedTarget.getAbsolutePosition(), focusedTarget.getFlowDistance() )
+                        )
+
+                        totalStressValue += callStressComputeModel( D, surClass.belongSurvivorGroupLogic, gamma )       # 累计该坦克对该生还者带来的压力值
+
+
+            # --- 修改生还者实例化类当前压力值的位置, 这里直接修改了 surClass 的内存, 因此也会同步更新 survivorGroupClassList 中的各个对象的属性 --- #
+
+            surClass.currSurvivorStress = totalStressValue
+
+
+    return True         # 成功计算完所有生还者实例化类的压力值
+
+
+
+
+def computeCurrGroupStress( survivorGroupClassList: list ):
+    """
+    在 computeCurrSurvivorStress 函数执行完成后执行, 此时所有生还者的压力值应全都知道
+    """
+    
+
 
 
 
@@ -397,7 +720,7 @@ class FixedSizeArray:
         self.data.append(value)
 
     def get_all(self):
-        return self.data.copy()     # 深度复制data, 避免修改同一内存
+        return self.data.copy()     # 复制data, 避免修改同一内存
 
     def __len__(self):
         return len(self.data)   # 返回数组当前的长度
@@ -643,6 +966,7 @@ class SurvivorClass:
 
 
 
+
 class TankClass:
     """
     为每个坦克 Client 实例化一个坦克类
@@ -713,6 +1037,7 @@ class TankClass:
 
 
 
+
 class SurvivorGroupClass:
     """
     为每个生还者组别 Survivor Group 实例化一个组别类
@@ -730,6 +1055,9 @@ class SurvivorGroupClass:
         # 生还者组别的的唯一标识, 由 survivorMembers 中的首位生还者的survivorID决定, 该ID将用于组别的合并与拆分, 以及数据的继承和复制
         # 详见 "方案" 第 3.1.3 小节: 生还者组别合并和拆分时数据的合并和复制
         self.survivorGroupID = survivorClassListGroupingByStrategy[ 0 ].survivorID
+
+        self.instantCreateTime = Game.Time()    # 该实例化类创建的时间, 假设游戏获取当前时间的函数为Time
+
 
         # 成员的总数量
         self.memberNum = len(survivorClassListGroupingByStrategy)
@@ -925,11 +1253,52 @@ class SurvivorGroupClass:
         
 
 
+    def updateLastSpawnTime():
+        """
+        更新 上一次 在该组别实例化类附近生成坦克的时间, 也意味着需要更新 下一次 开始申请坦克的时间
+        """
+
+
+
+    def adjustSpawnInterval(newLeftInterval: float, newRightInterval: float):
+        """
+        更改该组别实例化类 申请坦克间隔 的左右区间
+        """
+        
+
+
+    # --- 下面的函数用于更新实例化类的信息 --- #
+
+    def updateSurvivorGroupInfo(self, survivorClassListGroupingByStrategy: list):
+
+        if Game.Time() - self.instantCreateTime < directorExecutionFrequency:   # 不更新刚完成实例化的类的数据, 插件执行一次的时间通常不会超过0.1秒
+            return False
+        
+
+        # 该组别中的所有生还者类成员
+        self.survivorMembers = survivorClassListGroupingByStrategy
+
+        # 生还者组别的的唯一标识
+        self.survivorGroupID = survivorClassListGroupingByStrategy[ 0 ].survivorID
+
+        # 成员的总数量
+        self.memberNum = len(survivorClassListGroupingByStrategy)
+
+        # 非 处于 I 状态的 成员数量
+        self.notIMemberNum = 0
+
+        for surClass in survivorClassListGroupingByStrategy:
+            
+            if surClass.status != "I":
+                self.notIMemberNum += 1
+
+
+        # --- 根据更新的信息 (除了上面组别实例化类的成员列表以外, 还有游戏时间方面的新信息) 重新检查各个属性的取值 --- #
+
+        self.check_whether_in_S_Logic() 
+        self.check_logic()  
 
 
 
 
-
-
-
-
+        return True     # 成功更新实例化生还者组别类信息
