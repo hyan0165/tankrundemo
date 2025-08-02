@@ -546,6 +546,14 @@ def computeCurrSurvivorStress(survivorGroupClassList: list, tankClassList: list)
 
         for surClass in groupClass.survivorMembers:      # 遍历该组别中的所有成员
 
+            
+            # 如果该生还者处于 I 或者 S 状态, 那么其压力值统一设置为0
+            if surClass.status == "I" or surClass.status == "S":
+
+                surClass.currSurvivorStress = 0.0
+                continue            # 跳过后面的代码, 计算下一个生还者的压力值
+
+
             totalStressValue = 0.0      # 累计各个坦克对该成员带来的压力值
 
             for tankClass in tankClassList:         # 为该成员遍历所有坦克
@@ -683,8 +691,61 @@ def computeCurrGroupStress( survivorGroupClassList: list ):
     """
     在 computeCurrSurvivorStress 函数执行完成后执行, 此时所有生还者的压力值应全都知道
     """
-    
+    if len( survivorGroupClassList ) <= 0:          # 异常处理
+        return False            
 
+
+    for groupClass in survivorGroupClassList:
+
+        # 当生还者组别处于 冲刺型逻辑 时
+        if groupClass.survivorGroupLogic == "R":
+
+            for surClass in groupClass.survivorMembers:
+
+                if surClass.status != "I" and surClass.status != "S":
+                    
+                    # 冲刺型逻辑组别的代表压力值 由 该组别 首位 非倒地/挂边 且 非处于安全区域 的成员的压力值确定
+                    groupClass.survivorGroupStress = surClass.currSurvivorStress
+                    break       # 停止遍历        
+ 
+
+        # 当生还者组别处于 防守型逻辑 时
+        elif groupClass.survivorGroupLogic == "D":
+
+            sumStress = 0.0         # 该组别所有 非倒地/挂边 成员的压力值的总和
+
+            for surClass in groupClass.survivorMembers:
+
+                if surClass.status != "I":
+                    sumStress += surClass.currSurvivorStress
+
+            # 防守型逻辑组别的代表压力值  由 该组别 所有 正常 成员 的压力值总和的 平均值 确定
+            groupClass.survivorGroupStress = sumStress / groupClass.notIMemberNum
+
+
+        # 当生还者组别处于 后退型逻辑 时
+        elif groupClass.survivorGroupLogic == "B":
+
+            index = 0       # 用于遍历 该生还者组别 的成员列表
+            last_sur_index = 0          # 记录位于该组别 末尾 的 非倒地/挂边 且 非处于安全区域 的成员的索引
+
+            while index < groupClass.memberNum:
+
+                if groupClass.survivorMembers[ index ].status != "I" and groupClass.survivorMembers[ index ].status != "S":
+                    last_sur_index = index          # 更新该索引
+
+                index += 1
+
+            # 后退型逻辑组别的代表压力值 由 该组别 末尾第一个 非倒地/挂边 且 非处于安全区域 的成员的压力值确定
+            groupClass.survivorGroupStress = groupClass.survivorMembers[ last_sur_index ].currSurvivorStress
+
+        
+        # 当生还者组别处于 其他逻辑 时
+        else:
+            groupClass.survivorGroupStress = 0.0
+
+    
+    return True         # 成功计算完所有 组别 实例化类的 代表压力值
 
 
 
@@ -780,7 +841,7 @@ class SurvivorClass:
             self.status_10_sec_window.add_str_data( "R" )
 
         # 该生还者当前的压力值, 初始化为0, 生还者类内部无法更改该变量, 需要外部进行更改
-        self.currSurvivorStress = 0
+        self.currSurvivorStress = 0.0
 
         # 该生还者所属的生还者组别的逻辑, 初始化为字符串 R, 生还者类内部无法更改该变量, 需要外部进行更改
         self.belongSurvivorGroupLogic = "R"
@@ -816,7 +877,7 @@ class SurvivorClass:
 
     def dirEucD(self):      # 计算dirEucD距离
         if not self.is_slice_window_full():     # 如果游戏刚开始, 或者生还者刚复活, 即slice滑动窗口没有填充完毕
-            return 0
+            return 0.0
 
         # 请确保 slice_2_sec_window 添加的数据均为 (绝对坐标, 导演路程) 二元组
         # 过去2秒移动的导演路程大于dirEucNoMovementUpBoundary
@@ -835,7 +896,7 @@ class SurvivorClass:
         
         # 不满足上述所有条件, 则视为0位移
         else:
-            return 0
+            return 0.0
 
 
     def check_slice(self):      # 检查生还者短时行动切片
@@ -1077,7 +1138,7 @@ class SurvivorGroupClass:
         # 生还者组别 当前 的代表压力值, 数据类型为浮点型; 初始化为0, 等待检查; 将会与生还者类的 currSurvivorStress 一起计算; 
         # 只有得知了 所有 生还者组别类的成员构成, 以及 组别类的逻辑 以后, 才能够从 外部 调用相应的函数计算 survivorGroupStress 和 currSurvivorStress 的取值
         # 详见 “方案” 第 1.1.8 小节: gamma值的稀释
-        self.survivorGroupStress = 0
+        self.survivorGroupStress = 0.0
 
         # 该生还者 组别 当前是否应该被标记为S逻辑, 初始化为False
         self.should_be_marked_as_S_Logic = False
@@ -1302,3 +1363,4 @@ class SurvivorGroupClass:
 
 
         return True     # 成功更新实例化生还者组别类信息
+
