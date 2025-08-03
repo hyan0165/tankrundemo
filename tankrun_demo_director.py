@@ -348,7 +348,13 @@ def survivorGroupingStrategy(survivorClassList: list, last_survivorGroupClassLis
 
 
     survivorGroupClassList = []
-    waitingForAllocation = survivorClassList.copy()     # 等待分配的生还者类, 为了避免修改原本的 survivorClassList, 需要进行复制
+    
+    # waitingForAllocation = survivorClassList.copy()     # 等待分配的生还者类, 为了避免修改原本的 survivorClassList, 需要进行复制
+    # 如果插件不存在类似copy功能的函数, 那么请参照如下方法划分新内存并复制原本的生还者类:
+    waitingForAllocation = []
+
+    for surClass in survivorClassList:
+        waitingForAllocation.append( surClass.clone() )     # 使用自定义的克隆方法
 
 
     # --- 创建新的survivorGroupClassList --- #
@@ -410,7 +416,10 @@ def survivorGroupingStrategy(survivorClassList: list, last_survivorGroupClassLis
 
                 if firstSurvivorClass in groupClass.survivorMembers:        # 找到了首位生还者过去所在的组别
 
-                    updatedGroupClass = copy.deepcopy( groupClass )         # deepcopy 确保组别类中的 所有数组 也一并划分新内存地址, 请根据插件中类似功能的函数进行实现
+                    # updatedGroupClass = copy.deepcopy( groupClass )         # deepcopy 确保组别类中的 所有数组 也一并划分新内存地址, 请根据插件中类似功能的函数进行实现
+                    # 可以通过如下方法划分内存并复制:
+
+                    updatedGroupClass = groupClass.clone()          # 自定义克隆方法
                     updatedGroupClass.updateSurvivorGroupInfo( survivorClassListGroupingByStrategy )
                     
                     survivorGroupClassList.append( updatedGroupClass )      # 将更新后的组别实例化信息加入到 survivorGroupClassList 中
@@ -444,7 +453,9 @@ def survivorGroupingStrategy(survivorClassList: list, last_survivorGroupClassLis
 
                             if survivorClassListGroupingByStrategy[ index ] in groupClass.survivorMembers:      # 找到了后面的生还者过去所在的组别
 
-                                updatedGroupClass = copy.deepcopy( groupClass )
+                                # updatedGroupClass = copy.deepcopy( groupClass )
+
+                                updatedGroupClass = groupClass.clone()      # 自定义克隆方法
                                 updatedGroupClass.updateSurvivorGroupInfo( survivorClassListGroupingByStrategy )
 
                                 survivorGroupClassList.append( updatedGroupClass )      # 将更新后的组别实例化信息加入到 survivorGroupClassList 中
@@ -780,12 +791,27 @@ class FixedSizeArray:
         
         self.data.append(value)
 
-    def get_all(self):
-        return self.data.copy()     # 复制data, 避免修改同一内存
+    # def get_all(self):            # 无作用
+    #     return self.data.copy()     # 复制data, 避免修改同一内存
 
     def __len__(self):
         return len(self.data)   # 返回数组当前的长度
     
+
+    def clone(self):
+        """
+        专门为插件语法设计的在新内存地址克隆对象的方法
+        """
+        newObj = FixedSizeArray(self.maxSize)       # 划分新内存地址
+
+        newObj.maxSize = self.maxSize
+        
+        for _ in self.data:
+            newObj.data.append( _ )     # 已确保data中的元素都是 字符串 / 元组
+
+        return newObj       # 返回克隆对象的新内存地址
+
+
 
 
 class SurvivorClass:
@@ -881,18 +907,18 @@ class SurvivorClass:
 
         # 请确保 slice_2_sec_window 添加的数据均为 (绝对坐标, 导演路程) 二元组
         # 过去2秒移动的导演路程大于dirEucNoMovementUpBoundary
-        if ( self.slice_2_sec_window[ self.slice_2_sec_window.maxSize - 1 ][1]
-             - self.slice_2_sec_window[ 0 ][1] ) > dirEucNoMovementUpBoundary:      
+        if ( self.slice_2_sec_window.data[ self.slice_2_sec_window.maxSize - 1 ][1]
+             - self.slice_2_sec_window.data[ 0 ][1] ) > dirEucNoMovementUpBoundary:      
             
-            return +euclideanDistance( self.slice_2_sec_window[ self.slice_2_sec_window.maxSize - 1 ][0], 
-                                      self.slice_2_sec_window[ 0 ][0] )
+            return +euclideanDistance( self.slice_2_sec_window.data[ self.slice_2_sec_window.maxSize - 1 ][0], 
+                                      self.slice_2_sec_window.data[ 0 ][0] )
             
         # 过去2秒移动的导演路程小于dirEucNoMovementUpBoundary
-        if ( self.slice_2_sec_window[ self.slice_2_sec_window.maxSize - 1 ][1]
-             - self.slice_2_sec_window[ 0 ][1] ) < dirEucNoMovementDownBoundary:
+        if ( self.slice_2_sec_window.data[ self.slice_2_sec_window.maxSize - 1 ][1]
+             - self.slice_2_sec_window.data[ 0 ][1] ) < dirEucNoMovementDownBoundary:
             
-            return -euclideanDistance( self.slice_2_sec_window[ self.slice_2_sec_window.maxSize - 1 ][0], 
-                                      self.slice_2_sec_window[ 0 ][0] )
+            return -euclideanDistance( self.slice_2_sec_window.data[ self.slice_2_sec_window.maxSize - 1 ][0], 
+                                      self.slice_2_sec_window.data[ 0 ][0] )
         
         # 不满足上述所有条件, 则视为0位移
         else:
@@ -1024,6 +1050,42 @@ class SurvivorClass:
         # --- 生还者内部无法判断所属组别的逻辑, 因此不更新belongSurvivorGroupLogic --- #
 
         return True     # 成功更新实例化生还者类信息
+    
+
+
+    def clone(self):
+        """
+        专门为插件语法设计的在新内存地址克隆对象的方法
+        """
+        newObj = SurvivorClass(self.survivor)       # 划分新内存地址
+
+        newObj.survivor = self.survivor
+
+        newObj.survivorID = self.survivorID
+
+        newObj.instantCreateTime = self.instantCreateTime
+
+        newObj.absolutePosition = self.absolutePosition
+
+        newObj.flowDistance = self.flowDistance
+
+        newObj.isIncapacitied = self.isIncapacitied
+
+        newObj.should_be_marked_as_S_Status = self.should_be_marked_as_S_Status
+
+        newObj.slice = self.slice
+
+        newObj.status = self.status
+
+        newObj.slice_2_sec_window = self.slice_2_sec_window.clone()     # 自定义函数 克隆 FixedSizeArray对象至新内存地址
+
+        newObj.status_10_sec_window = self.status_10_sec_window.clone()         # 自定义函数 克隆 FixedSizeArray对象至新内存地址
+
+        newObj.currSurvivorStress = self.currSurvivorStress
+        
+        newObj.belongSurvivorGroupLogic = self.belongSurvivorGroupLogic
+
+        return newObj       # 返回克隆对象的新内存地址
 
 
 
@@ -1095,6 +1157,28 @@ class TankClass:
         self.focusedTarget = self.tank.getFocusedTarget()
 
         return True     # 成功更新实例化坦克类信息
+    
+
+
+    def clone(self):
+        """
+        专门为插件语法设计的在新内存地址克隆对象的方法
+        """
+        newObj = TankClass(self.tank)       # 划分新内存地址
+
+        newObj.tank = self.tank
+
+        newObj.tankID = self.tankID
+
+        newObj.instantCreateTime = self.instantCreateTime
+
+        newObj.absolutePosition = self.absolutePosition
+
+        newObj.flowDistance = self.flowDistance
+
+        newObj.focusedTarget = self.focusedTarget
+
+        return newObj       # 返回克隆对象的新内存地址
 
 
 
@@ -1171,7 +1255,10 @@ class SurvivorGroupClass:
         self.check_whether_in_S_Logic()     
         
         # 检查 survivorGroupLogic 的取值
-        self.check_logic()      
+        self.check_logic()
+
+        # 检查 whetherRequestTank 的取值
+        self.checkWhetherRequestTank()  
 
 
 
@@ -1307,24 +1394,65 @@ class SurvivorGroupClass:
     
 
     
-    def checkWhetherRequestTank():
+    def checkWhetherRequestTank(self):
         """
         检查是否满足申请在该组别类附近生成坦克的条件
+        该函数可被生还者组别类自身调用, 返回的值供外界判断该生还者组别是否正在申请生成坦克
         """
+        if ( Game.Time() - self.lastSpawnTime ) >= self.spawnInterval:      # 当前游戏时间 减去 上一次生成坦克的游戏时间 大于等于开始请求的间隔
+            self.whetherRequestTank = True          # 是的, 开始申请, 直到成功在该组别附近生成坦克
+
+        # 否则, 维持原本的否定值不变
+
+        return self.whetherRequestTank      # 返回布尔值
         
 
 
-    def updateLastSpawnTime():
+    def updateLastSpawnTime(self):
         """
-        更新 上一次 在该组别实例化类附近生成坦克的时间, 也意味着需要更新 下一次 开始申请坦克的时间
+        更新 上一次 在该组别实例化类附近生成坦克的时间, 也意味着需要更新 下一次 开始申请坦克的时间; 
+        调用此函数需要满足的前提条件为坦克生成器 在该组别附近 成功 生成坦克;
+        只能被外部调用, 生还者组别类自身不可调用
         """
+        self.whetherRequestTank = False         # 调用此函数时, 说明已经成功在该组别附近生成坦克, 因此取消申请坦克
+        
+        self.lastSpawnTime = Game.Time()        # 记录此次生成坦克的时间
+
+        # 重新生成下一次开始申请坦克的时间间隔
+        self.spawnInterval = random.uniform( self.leftSpawnInterval, self.rightSpawnInterval )
+
+        return True
 
 
 
-    def adjustSpawnInterval(newLeftInterval: float, newRightInterval: float):
+    def adjustSpawnInterval(self, newLeftInterval: float, newRightInterval: float):
         """
         更改该组别实例化类 申请坦克间隔 的左右区间
+        该函数将会被 动态调控策略 调用; 
+        只能被外部调用, 生还者组别类自身不可调用
         """
+        if newLeftInterval < 0 or newRightInterval < 0:         # 异常处理, 负的左右区间
+            return False            # 直接退出函数, 不更改请求间隔
+
+        if newLeftInterval > newRightInterval - 1.0:          # 异常处理, 左右区间间距太小, 以及左区间大于右区间
+            return False            # 直接退出函数, 不更改请求间隔
+        
+
+        # 新的请求间隔区间 相比原来的区间  *不可以*  变化过小或者没有变化
+        if abs( self.leftSpawnInterval - newLeftInterval ) >= directorExecutionFrequency or abs( self.rightSpawnInterval - newRightInterval ) >= directorExecutionFrequency:
+
+            if self.spawnInterval < newLeftInterval:       # 如果当前的 spawnInterval 取值小于新的左区间
+                self.spawnInterval = random.uniform( newLeftInterval, newRightInterval )        # 重新生成下一次请求间隔 (延长请求间隔)
+            
+            elif self.spawnInterval > newRightInterval:        # 如果当前的 spawnInterval 取值大于新的右区间
+                self.spawnInterval = random.uniform( newLeftInterval, newRightInterval )        # 重新生成下一次请求间隔 (缩短请求间隔)
+
+            self.leftSpawnInterval = newLeftInterval
+            self.rightSpawnInterval = newRightInterval
+
+       # 不满足上面的条件, 则不做任何改变
+
+        return True
         
 
 
@@ -1357,10 +1485,154 @@ class SurvivorGroupClass:
         # --- 根据更新的信息 (除了上面组别实例化类的成员列表以外, 还有游戏时间方面的新信息) 重新检查各个属性的取值 --- #
 
         self.check_whether_in_S_Logic() 
-        self.check_logic()  
-
-
+        self.check_logic()
+        self.checkWhetherRequestTank()  
 
 
         return True     # 成功更新实例化生还者组别类信息
+    
+
+
+    def clone(self):
+        """
+        专门为插件语法设计的在新内存地址克隆对象的方法
+        """
+        newObj = SurvivorGroupClass(self.survivorMembers)       # 划分新内存地址
+
+        newObj.survivorMembers = []         # 为 survivorMembers 列表 及其中的 生还者类 划分新的内存
+
+        for _ in self.survivorMembers:
+            newObj.survivorMembers.append( _.clone() )      # 克隆原本的列表中 所有的生还者类 至新的列表中
+
+        newObj.survivorGroupID = self.survivorGroupID
+
+        newObj.instantCreateTime = self.instantCreateTime
+
+        newObj.memberNum = self.memberNum
+
+        newObj.notIMemberNum = self.notIMemberNum
+
+        newObj.survivorGroupLogic = self.survivorGroupLogic
+
+        newObj.survivorGroupStress = self.survivorGroupStress
+
+        newObj.should_be_marked_as_S_Logic = self.should_be_marked_as_S_Logic
+
+        newObj.leftSpawnInterval = self.leftSpawnInterval
+
+        newObj.rightSpawnInterval = self.rightSpawnInterval
+
+        newObj.spawnInterval = self.spawnInterval
+
+        newObj.lastSpawnTime = self.lastSpawnTime
+
+        newObj.whetherRequestTank = self.whetherRequestTank
+
+        return newObj       # 返回克隆对象的新内存地址
+
+
+
+
+
+
+"""
+下面的代码将模拟插件的执行流程. 当游戏的导演系统被激活后, 本插件将以 directorExecutionFrequency 的频率反复执行, 直到本局游戏结束
+"""
+if __name__ == "__main__":
+
+    while True:         # 如果 游戏正在进行 且 没有出现异常, 那么插件就不会停止执行, 这里的 True 可以视为导演系统被激活
+
+
+            # --- 1. 获取所需要的客户端 --- #
+        
+        # 下面的变量均为全局变量
+        satisfiedSurvivorClients, survivorClientNum, tankClients, tankClientNum = getSatisfiedClientFromGame()
+
+
+            # --- 2. 为这些客户端创建或者更新对应的实例化类 --- #
+
+        # 如果当前游戏中不存在存活的生还者, 则跳出循环体并停止插件的执行, 可以视为导演系统被关闭
+        # 再次提醒, 不轻易使用 survivorClientNum <= 0, 因为 survivorClientNum 同样记录了 死亡 和 旁观 的生还者客户端的数量
+        if len( satisfiedSurvivorClients ) <= 0:         
+            break 
+
+
+        # --- 重点: 如果插件不存在功能近似于 python 中 deepcopy 的函数为 数组 和 实例化类 强制划分新的内存地址, 那么可以尝试使用
+        # 如下办法, 以避免修改上一个插件执行周期中产生的数据, 因为保持先前数据的一致性是每个周期中数据继承和更新的基础 --- #
+
+        temp_last_survivorClassList = []
+        temp_last_tankClassList = []
+        # temp_last_survivorGroupClassList = []
+
+        for surClass in last_survivorClassList:
+            temp_last_survivorClassList.append( surClass.clone() )      # 克隆原本的生还者实例化类信息至新内存
+
+        for tankClass in last_tankClassList:
+            temp_last_tankClassList.append( tankClass.clone() )         # 克隆原本的坦克实例化类信息至新内存
+
+        # --- 组别类不需要使用临时列表存储克隆的组别实例化信息, 划分新内存的工作会在 survivorGroupingStrategy 函数中完成 --- #
+        # --- 这是因为即便 last_survivorClassList 和 last_tankClassList 中的数据被污染, 也不影响插件剩余逻辑的运行, 因为生还者和坦克不存在合并与拆分的处理 --- #
+        # --- 而一旦 last_survivorGroupClassList 被污染, 那么整个分组逻辑将直接出现问题, 因此 survivorGroupingStrategy 内部实现了新内存的划分 --- #
+
+        # for groupClass in last_survivorGroupClassList:
+        #     temp_last_survivorGroupClassList.append( groupClass.clone() )       # 克隆原本的 生还者组别 实例化类信息至新内存
+
+
+        # 传入生还者类的临时列表; 在该函数执行完毕后, 该临时列表将作废, 因为其中的数据已经被污染 (内存引用问题), 返回当前的生还者类列表
+        survivorClassList = getSurvivorClassListSortedByFlowDist(satisfiedSurvivorClients, temp_last_survivorClassList)     
+
+        # 传入坦克类的临时列表; 在该函数执行完毕后, 该临时列表将作废, 因为其中的数据已经被污染 (内存引用问题), 返回当前的坦克类列表
+        tankClassList = getTankClassList(tankClients, temp_last_tankClassList)
+
+
+            # --- 3. 为 survivorClassList 执行生还者分组策略, 并为每个组别创建或者更新对应的实例化类, 同时执行合并与拆分策略 --- #
+
+        if len( survivorClassList ) <= 0:
+            break
+        
+        # last_survivorGroupClassList 不会被污染, 该函数内部已经实现了新内存的划分 (克隆), 详见上面的注释, 返回当前的生还者组别类列表
+        survivorGroupClassList = survivorGroupingStrategy(survivorClassList, last_survivorGroupClassList)   
+
+
+            # --- 4. 计算各生还者及其所属组别的压力值 --- #
+
+        if len( survivorGroupClassList ) <= 0:
+            break
+
+        # 无需克隆 survivorGroupClassList 中保存的各个生还者类和组别类数据, 因为计算他们的压力值就是要篡改他们内部的数据
+        computeCurrSurvivorStress(survivorGroupClassList, tankClassList)
+        computeCurrGroupStress(survivorGroupClassList)
+
+
+            # --- 5. 动态调控策略, 在调用坦克生成器前执行; 如果需要修改生还者组别的请求坦克间隔, 请调用 adjustSpawnInterval 函数 --- #
+
+            # 此部分内容尚未完成
+
+
+            # --- 6. 调用坦克生成器, 各个 组别实例化类 保存的数据作为是否要在该组别附近生成坦克的依据, 按照 survivorGroupClassList 中组别类的先后顺序进行判断, 即优先为前排组别生成坦克 --- #
+
+            # 此部分内容 Python 难以写出伪代码, 请参阅 "方案" 1.1.11, 1.2.4, 1.3.3 小节 与 第3大章 以明确 坦克生成条件 和 坦克生成位置 的合法性
+
+
+
+            # --- 7. 其他处理 --- #
+
+            # 可以考虑使用之前产生的数据做额外的处理, 比如根据生还者的压力值计算积分等功能, 目前阶段尚不实现
+
+
+
+            # --- 8. 记录此次插件执行周期所产生的数据 --- #
+        
+        last_survivorClassList = survivorClassList
+        last_tankClassList = tankClassList
+        last_survivorGroupClassList = survivorGroupClassList
+
+
+            # --- 9. 以 directorExecutionFrequency 的频率回调插件 --- #
+
+            # 请使用插件中相应的函数实现
+
+
+
+
 
